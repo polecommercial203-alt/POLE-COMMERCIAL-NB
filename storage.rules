@@ -1,0 +1,52 @@
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+    function member(org) {
+      return request.auth != null
+        && firestore.exists(/databases/(default)/documents/orgs/$(org)/users/$(request.auth.uid));
+    }
+    function active(org) {
+      return firestore.get(/databases/(default)/documents/orgs/$(org)/users/$(request.auth.uid)).data.get('active', true) == true;
+    }
+    function role(org) {
+      return firestore.get(/databases/(default)/documents/orgs/$(org)/users/$(request.auth.uid)).data.role;
+    }
+    function management(org) {
+      return role(org) in ['admin', 'dg', 'dc', 'cdc'];
+    }
+
+    /* New secure layout: owner UID is part of the path and metadata. */
+    match /orgs/{org}/{folder}/{uid}/{file} {
+      allow read: if member(org) && active(org)
+        && (management(org) || uid == request.auth.uid);
+      allow create: if member(org) && active(org)
+        && role(org) in ['admin', 'dg', 'dc', 'cdc', 'com', 'apporteur']
+        && uid == request.auth.uid
+        && request.resource.size < 20 * 1024 * 1024
+        && request.resource.metadata.ownerUid == request.auth.uid
+        && request.resource.metadata.orgId == org
+        && (
+          request.resource.contentType.matches('application/pdf')
+          || request.resource.contentType.matches('image/.*')
+          || request.resource.contentType.matches('text/.*')
+          || request.resource.contentType.matches('application/vnd.*')
+          || request.resource.contentType.matches('application/msword')
+          || request.resource.contentType.matches('message/rfc822')
+        );
+      allow update: if false;
+      allow delete: if member(org) && active(org) && management(org);
+    }
+
+    /* Backward compatibility for files uploaded before the secure path migration.
+     * Ordinary users cannot read them; management can still administer them. */
+    match /orgs/{org}/{folder}/{file} {
+      allow read, delete: if member(org) && active(org) && management(org);
+      allow create, update: if false;
+    }
+
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}
