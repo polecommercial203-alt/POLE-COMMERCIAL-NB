@@ -132,14 +132,6 @@ const sane = o => JSON.parse(JSON.stringify(o, (k, v) => (v === undefined ? null
 
 const shardRef = name => doc(db, ...ORG_PATH, 'state', name);
 
-async function loadState() {
-  const snap = await getDocs(collection(db, ...ORG_PATH, 'state'));
-  if (snap.empty) return null;
-  const shards = {};
-  snap.forEach(d => { shards[d.id] = cleanShard(d.data()); });
-  return assemble(shards);
-}
-
 /* ══════════════════ Synchronisation collaborative robuste ══════════════════
  *
  * Firebase est la source de vérité. localStorage n'est qu'un cache de démarrage.
