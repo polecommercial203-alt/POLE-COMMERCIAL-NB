@@ -67,9 +67,9 @@ const ORG_PATH = ['orgs', ORG_ID];
  * Toute clé de `state` absente de cette table atterrit dans « divers » : ajouter
  * un module au CRM ne casse donc rien, on range plus tard. */
 const SHARDS = {
-  config: ['v', 'seq', 'seqPro', 'seqFact', 'entreprise', 'nom', 'forme', 'adresse',
+  config: ['v', 'seq', 'seqPro', 'seqProAnnee', 'seqFact', 'seqFactAnnee', 'entreprise', 'nom', 'forme', 'adresse',
     'rccm', 'ifu', 'tel', 'email', 'tvaRate', 'devise', 'permissions',
-    'apporteurs', 'targets', 'alertParams', 'emailSettings', 'disciplineKPIs',
+    'targets', 'emailSettings', 'disciplineKPIs',
     'cdcDept', 'briefSettings'],
 
   /* Listes de référence — tranche à part, écrite par tous ceux qui saisissent.
@@ -77,7 +77,14 @@ const SHARDS = {
    * les règles Firestore tiennent à l'écart du paramétrage. */
   referentiel: ['lists'],
 
-  equipe: ['team', 'adminUsers', 'individualTargets'],
+  equipe: ['team', 'adminUsers'],
+
+  /* Gestion d'équipe courante (paramètres d'alerte, apporteurs, objectifs
+   * individuels) : distincte de « config »/« équipe » exprès, pour que le chef
+   * de département commercial (cdc) puisse l'écrire sans hériter au passage
+   * d'un accès technique aux habilitations, aux comptes ou à la composition
+   * de l'équipe — qui, eux, restent réservés à direction/admin. */
+  gestion: ['alertParams', 'apporteurs', 'individualTargets'],
 
   affaires: ['opportunities', 'lost', 'accounts', 'clients', 'contracts'],
 
@@ -152,6 +159,7 @@ let pendingState = null;
 let pushing = false;
 let retryTimer = null;
 let retryDelay = 1000;
+let lastFlushOk = true;
 let remoteShards = {};
 let remoteState = null;
 let initializedRemote = false;
@@ -311,7 +319,15 @@ async function loadState() {
 }
 
 async function flush() {
-  if (pushing || !pendingState) return;
+  if (pushing) {
+    /* Un envoi est déjà en cours : on attend son issue au lieu de repartir
+     * dans le vide, pour que l'appelant sache réellement ce qu'il en est. */
+    return new Promise(resolve => {
+      const check = () => { if (!pushing) resolve(lastFlushOk); else setTimeout(check, 100); };
+      check();
+    });
+  }
+  if (!pendingState) return true;   // rien à envoyer = pas d'échec
   pushing = true;
   const state = pendingState;
   pendingState = null;
@@ -352,8 +368,13 @@ async function flush() {
     retryDelay = 1000;
     rebuildRemoteState();
     emitRemoteState(remoteState, 'local-commit');
+    lastFlushOk = true;
   } catch (err) {
-    /* Retry silencieux avec backoff. Aucune bannière intrusive. */
+    /* Retry silencieux avec backoff pour les saisies courantes — mais l'appelant
+     * de ce flush() (ex. création de compte) est informé de l'échec réel, lui,
+     * pour pouvoir prévenir l'utilisateur au lieu de le laisser croire que
+     * tout s'est bien passé. */
+    lastFlushOk = false;
     if (!retryTimer) {
       retryTimer = setTimeout(() => {
         retryTimer = null;
@@ -368,6 +389,7 @@ async function flush() {
       pushTimer = setTimeout(flush, 250);
     }
   }
+  return lastFlushOk;
 }
 
 function push(state) {
